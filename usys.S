@@ -8,14 +8,17 @@
     int $T_SYSCALL; \
     ret
 
+SYSCALL(wait2)
+SYSCALL(set_prio)
+SYSCALL(yield)
 SYSCALL(fork)
 SYSCALL(exit)
 SYSCALL(wait)
 SYSCALL(pipe)
 SYSCALL(read)
 SYSCALL(write)
-SYSCALL(close)
 SYSCALL(kill)
+SYSCALL(close)
 SYSCALL(exec)
 SYSCALL(open)
 SYSCALL(mknod)

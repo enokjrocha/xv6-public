@@ -81,8 +81,10 @@ argstr(int n, char **pp)
     return -1;
   return fetchstr(addr, pp);
 }
-
+extern int sys_yield(void);
+extern int sys_set_prio(void);
 extern int sys_chdir(void);
+extern int sys_wait2(void);
 extern int sys_close(void);
 extern int sys_dup(void);
 extern int sys_exec(void);
@@ -126,6 +128,9 @@ static int (*syscalls[])(void) = {
 [SYS_link]    sys_link,
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
+[SYS_wait2]   sys_wait2,
+[SYS_set_prio] sys_set_prio,
+[SYS_yield] sys_yield,
 };
 
 void

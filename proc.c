@@ -20,6 +20,108 @@ extern void trapret(void);
 
 static void wakeup1(void *chan);
 
+//update_time
+void update_time(){
+  struct proc *p;
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if (p->state == RUNNABLE){
+      p->retime++;
+    }
+    if (p->state == SLEEPING){
+      p->stime++;
+    }
+    if (p->state == RUNNING){
+      p->rutime++;
+    }     
+  }
+}
+
+//Função que efetua a mudança de prioridade 
+
+int set_prio(int priority){
+  
+  struct proc *proc_;
+  int pid; //id do processo em questão
+  struct proc *proc_a = myproc();
+  
+  pid = proc_a->pid;  
+  
+  acquire(&ptable.lock);
+  
+  for(proc_ = ptable.proc; proc_ < &ptable.proc[NPROC]; proc_++){
+    
+    if(pid == proc_->pid) {
+        
+        proc_->priority = priority;
+        
+        release(&ptable.lock);
+        
+        return 0;
+    }
+  }
+
+  return -1; //verificar erro
+}
+
+// Implementaçaõ da função wait2
+int wait2(int* retime, int* rutime, int* stime){
+  
+  struct proc *proc_;
+  int hk;
+  int pid;
+  struct proc *proc_a = myproc(); //processo atual
+  
+  *retime = proc_a->retime; //atribui a retime o tempo em que o processo esteve no estado READY
+  *rutime = proc_a->rutime; //atribui a rutime o tempo em que o processo esteve no estado RUNNING
+  *stime = proc_a->stime;   //atribui a stime o tempo em que o processo esteve no estado SLEEPING
+
+  acquire(&ptable.lock);
+  while(1){//loop infinito
+    //Percorre a tabela em busca de filhos sem pai
+    hk = 0; //tem criança
+    
+    for(proc_ = ptable.proc; proc_ < &ptable.proc[NPROC]; proc_++){
+      
+      if(proc_->parent != proc_a)
+        continue;
+      hk = 1;
+      
+      if(proc_->state == ZOMBIE){
+    
+        pid = proc_->pid; // armazena id do processo
+        
+        kfree(proc_->kstack);
+        
+        proc_->kstack = 0;
+        
+        freevm(proc_->pgdir);
+        
+        proc_->state = UNUSED;
+        
+        proc_->parent = 0;
+        proc_->pid = 0;
+        proc_->killed = 0;
+        proc_->name[0] = 0;
+        
+
+        release(&ptable.lock);
+
+        return pid; //retorna o id do filho que não tem pai
+      }
+    
+    }
+
+    if(proc_a->killed || !hk){
+      release(&ptable.lock);
+      return -1; //erro
+    }
+
+    sleep(proc_a, &ptable.lock);  //verificar
+  }
+  return 0; //tudo certo
+}
+
+
 void
 pinit(void)
 {
@@ -88,7 +190,12 @@ allocproc(void)
 found:
   p->state = EMBRYO;
   p->pid = nextpid++;
+  p->ticks = 0;
 
+  p->ctime = ticks;
+  p->stime = 0;
+  p->rutime = 0;
+  p->retime = 0;
   release(&ptable.lock);
 
   // Allocate kernel stack.
@@ -198,6 +305,7 @@ fork(void)
   }
   np->sz = curproc->sz;
   np->parent = curproc;
+  np->priority = 2;
   *np->tf = *curproc->tf;
 
   // Clear %eax so that fork returns 0 in the child.
@@ -273,17 +381,17 @@ int
 wait(void)
 {
   struct proc *p;
-  int havekids, pid;
+  int hk, pid;
   struct proc *curproc = myproc();
   
   acquire(&ptable.lock);
   for(;;){
     // Scan through table looking for exited children.
-    havekids = 0;
+    hk = 0;
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       if(p->parent != curproc)
         continue;
-      havekids = 1;
+      hk = 1;
       if(p->state == ZOMBIE){
         // Found one.
         pid = p->pid;
@@ -301,7 +409,7 @@ wait(void)
     }
 
     // No point waiting if we don't have any children.
-    if(!havekids || curproc->killed){
+    if(!hk || curproc->killed){
       release(&ptable.lock);
       return -1;
     }
@@ -311,43 +419,52 @@ wait(void)
   }
 }
 
-//PAGEBREAK: 42
-// Per-CPU process scheduler.
-// Each CPU calls scheduler() after setting itself up.
-// Scheduler never returns.  It loops, doing:
-//  - choose a process to run
-//  - swtch to start running that process
-//  - eventually that process transfers control
-//      via swtch back to the scheduler.
-void
-scheduler(void)
-{
-  struct proc *p;
+
+void scheduler(void){
+  struct proc *proc_, *proc__, *hP;
   struct cpu *c = mycpu();
   c->proc = 0;
   
   for(;;){
-    // Enable interrupts on this processor.
     sti();
 
-    // Loop over process table looking for process to run.
+    // Buscando por processos do tipo RUNNABLE
     acquire(&ptable.lock);
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE)
+
+    for(proc_ = ptable.proc; proc_ < &ptable.proc[NPROC]; proc_++){
+      if(proc_->state != RUNNABLE) //caso o processo não seja, o próximo será analisado
         continue;
+      hP = proc_;
+      // escolhe o processo de maior prioridade
+      for(proc__ = ptable.proc; proc__ < &ptable.proc[NPROC]; proc__++){
+        if(proc__->state != RUNNABLE)
+          continue;
+        if (hP->priority < proc__->priority) //quanto maior o valor, menor a prioridade  
+          hP = proc__;
+      }
 
-      // Switch to chosen process.  It is the process's job
-      // to release ptable.lock and then reacquire it
-      // before jumping back to us.
-      c->proc = p;
-      switchuvm(p);
-      p->state = RUNNING;
+      proc_ = hP; //armazena a maior prioridade
 
-      swtch(&(c->scheduler), p->context);
+      for(proc__ = ptable.proc; proc__ < &ptable.proc[NPROC]; proc__++){
+        if(proc__->state == RUNNABLE && proc__->pid != proc_->pid){
+          proc__->ticks++;
+          if((proc__->ticks > S2TO3) && (proc__->priority == 2)){
+              proc__->ticks = 0;
+              proc__->priority = 3; //aumenta prioridade 
+          }
+          if((proc__->ticks > S1TO2) && (proc__->priority == 1)){
+            proc__->ticks = 0;
+            proc__->priority = 2; //aumenta prioridade
+          }
+        }
+      }
+
+      c->proc = proc_;
+      switchuvm(proc_);
+      proc_->state = RUNNING;
+
+      swtch(&(c->scheduler), proc_->context);
       switchkvm();
-
-      // Process is done running for now.
-      // It should have changed its p->state before coming back.
       c->proc = 0;
     }
     release(&ptable.lock);
@@ -363,8 +480,7 @@ scheduler(void)
 // break in the few places where a lock is held but
 // there's no process.
 void
-sched(void)
-{
+sched(void){
   int intena;
   struct proc *p = myproc();
 
